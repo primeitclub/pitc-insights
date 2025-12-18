@@ -2,16 +2,34 @@
 # THIS FILE WAS AUTOMATICALLY GENERATED (DO NOT MODIFY)
 # ------------------------------------------------------
 
+type Contributions {
+  """Total contributions"""
+  total: Int!
+
+  """Total commit contributions"""
+  totalCommitContributions: Int!
+
+  """Total pull request contributions"""
+  totalPullRequestContributions: Int!
+}
+
 """Get Insights of an organization"""
 type Insights {
+  endDate: String
+
   """List of repositories with their total commits"""
   orgCommits: [OrgCommits!]!
 
   """Organization name"""
   organizationName: String!
+  startDate: String
 
   """List of users with their contributions"""
   userContributions: [UserContributions!]!
+
+  """Weekly User Contributions"""
+  weeklyUserContributions: [UserContributions!]!
+  year: Int
 }
 
 """Get organization total commits"""
@@ -25,14 +43,25 @@ type OrgCommits {
 
 type Query {
   """Get insights for the organization"""
-  getInsights: Insights!
+  getInsights(endDate: String, startDate: String, year: Float): Insights!
 }
 
 """Get list of users of an organization with their contributions"""
 type UserContributions {
-  """Number of contributions"""
-  contributions: Int!
+  """User contributions summary"""
+  contributions: Contributions!
 
   """User name"""
   userName: String!
+
+  """Weekly contributions"""
+  weeklyContributions: [WeeklyContribution!]
+}
+
+type WeeklyContribution {
+  """Contribution count for the week"""
+  contributionCount: Int!
+
+  """Start date of the week"""
+  startDate: String!
 }

@@ -1,5 +1,5 @@
 import { InsightsService } from "./insights.service";
-import { Field, Parent, Query, ResolveField, Resolver } from "@nestjs/graphql";
+import { Args, Field, Parent, Query, ResolveField, Resolver } from "@nestjs/graphql";
 import { Insights } from "./models/insights.model";
 import { UserContributions } from "./models/user-contributions.model";
 import { OrgCommits } from "./models/org-commits.model";
@@ -13,9 +13,16 @@ export class InsightsResolver {
       ) { }
 
       @Query(() => Insights, { description: "Get insights for the organization" })
-      async getInsights() {
+      async getInsights(
+            @Args('year', { type: () => Number, nullable: true }) year?: number,
+            @Args('startDate', { type: () => String, nullable: true }) startDate?: string,
+            @Args('endDate', { type: () => String, nullable: true }) endDate?: string,
+      ) {
             return {
                   organizationName: this.insightsService.organizationName,
+                  year,
+                  startDate,
+                  endDate
             };
       }
 
@@ -26,6 +33,15 @@ export class InsightsResolver {
 
       @ResolveField(() => [UserContributions], { description: "User Contributions" })
       userContributions(@Parent() insights: Insights) {
-            return this.insightsService.getOrgUserContributions();
+            const year = insights.year;
+            return this.insightsService.getOrgUserContributions(year);
+      }
+
+      @ResolveField(() => [UserContributions], { description: "Weekly User Contributions" })
+      weeklyUserContributions(@Parent() insights: Insights) {
+            const year = insights.year;
+            const startDate = insights.startDate;
+            const endDate = insights.endDate;
+            return this.insightsService.getOrgUserWeeklyContributions(year, startDate, endDate);
       }
 }

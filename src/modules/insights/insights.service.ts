@@ -1,6 +1,8 @@
 import { ConnectGitHub } from "src/shared/config/connect-github";
 import { Injectable } from "@nestjs/common";
 import { ConnectRedis } from "src/shared/config/connect-redis";
+import { get } from "http";
+import { getLastWeekFromStartDate } from "src/shared/utils/utils";
 
 // Note: Its better use a graphql variable when wrtiting queries to avoid injection attacks
 //  Note: You can make 5000 requests per hour with authentication, unauthenticated requests get 60 requests per hour
@@ -28,6 +30,7 @@ export class InsightsService {
             : 100;
       private ORG_COMMITS_PREFIX = 'orgTotalCommits_';
       private ORG_USER_CONTRIBUTIONS_PREFIX = 'orgUserContributions_';
+      private ORG_USER_WEEKLY_PREFIX = 'orgUserWeeklyContributions_';
       private SESSION_TTL_SECONDS = 3600; // 1 hour
       constructor(private readonly connectGitHub: ConnectGitHub, private readonly connectRedis: ConnectRedis) { }
 
@@ -76,7 +79,6 @@ export class InsightsService {
                               num: this.repoNumber,
                         },
                   );
-                  console.log("Fetched repositories:", repos.organization.repositories.nodes.length);
                   const orgCommits = repos.organization.repositories.nodes.map((repo) => ({
                         repoName: repo.name,
                         commits: repo?.defaultBranchRef?.target.history.totalCount ?? 0,
@@ -90,13 +92,28 @@ export class InsightsService {
             }
       }
 
-      async getOrgUserContributions(): Promise<{ userName: string; contributions: number }[]> {
+      async getOrgUserContributions(year?: number): Promise<{
+            userName: string;
+            contributions: {
+                  totalCommitContributions: number;
+                  totalPullRequestContributions: number;
+                  total: number;
+            }
+      }[]> {
             try {
-                  const cachedData = await this.connectRedis.get<{ userName: string; contributions: number }[]>(this.ORG_USER_CONTRIBUTIONS_PREFIX + this.organizationName);
+                  const targetYear = year || new Date().getFullYear();
+                  //    2024-12-31T24:00:00Z refers to the exact same moment in time as 2025-01-01T00:00:00Z. Most database and programming languages (like Python, Java, and JavaScript) enforce a strict 0–23 hour range to avoid this redundancy and simplify logic.
+                  const fromDate = new Date(`${targetYear}-01-01T00:00:00Z`).toISOString();
+                  const toDate = new Date(`${targetYear}-12-31T23:59:59Z`).toISOString();
+
+                  const cacheKey = `${this.ORG_USER_CONTRIBUTIONS_PREFIX}${this.organizationName}:${targetYear}`;
+
+                  const cachedData = await this.connectRedis.get<any>(cacheKey);
                   if (cachedData) {
                         console.log("Returning cached organization user contributions");
                         return cachedData;
                   }
+
                   const result = await this.connectGitHub.getClient()<{
                         organization: {
                               membersWithRole: {
@@ -104,34 +121,47 @@ export class InsightsService {
                                           login: string;
                                           contributionsCollection: {
                                                 totalCommitContributions: number;
+                                                totalPullRequestContributions: number;
                                           };
                                     }[];
                               };
                         };
                   }>(
-                        `query GetOrgMembers($organizationName: String!, $num: Int!) {
-                        organization(login: $organizationName) {
-                              membersWithRole(first: $num) {
-                                    nodes {
-                                          login
-                                          contributionsCollection {
-                                                totalCommitContributions
-                                          }
-                                    }
-                              }
+                        `query GetOrgMembers($organizationName: String!, $num: Int!, $from: DateTime!, $to: DateTime!) {
+                organization(login: $organizationName) {
+                    membersWithRole(first: $num) {
+                        nodes {
+                            login
+                            contributionsCollection(from: $from, to: $to) {
+                                totalCommitContributions
+                                totalPullRequestContributions
+                            }
                         }
-                  }`,
+                    }
+                }
+            }`,
                         {
                               organizationName: this.organizationName,
                               num: this.userNumber,
+                              from: fromDate,
+                              to: toDate,
                         },
                   );
+
                   console.log("Fetched organization members:", result.organization.membersWithRole.nodes.length);
+
                   const userContributions = result.organization.membersWithRole.nodes.map((node) => ({
                         userName: node.login,
-                        contributions: node.contributionsCollection.totalCommitContributions,
-                  }));
-                  await this.connectRedis.set(this.ORG_USER_CONTRIBUTIONS_PREFIX + this.organizationName, userContributions, this.SESSION_TTL_SECONDS);
+                        contributions: {
+                              totalCommitContributions: node.contributionsCollection.totalCommitContributions,
+                              totalPullRequestContributions: node.contributionsCollection.totalPullRequestContributions,
+                              total: node.contributionsCollection.totalCommitContributions +
+                                    node.contributionsCollection.totalPullRequestContributions,
+                        },
+                  }))
+                        .sort((a, b) => b.contributions.total - a.contributions.total);
+
+                  await this.connectRedis.set(cacheKey, userContributions, this.SESSION_TTL_SECONDS);
                   return userContributions;
             }
             catch (error) {
@@ -140,6 +170,108 @@ export class InsightsService {
             }
       }
 
+
+      async getOrgUserWeeklyContributions(year?: number, startDate?: string, endDate?: string): Promise<{
+            userName: string;
+            weeklyContributions: Array<{
+                  startDate: string;
+                  contributionCount: number;
+            }>;
+      }[]> {
+            try {
+                  const targetYear = year || new Date().getFullYear();
+                  const startDateStr = startDate || `${targetYear}-01-01`;
+                  const endDateStr = endDate || getLastWeekFromStartDate(startDateStr);
+                  // Fetch full year for caching efficiency
+                  const fromDate = new Date(`${targetYear}-01-01T00:00:00Z`).toISOString();
+                  const toDate = new Date(`${targetYear}-12-31T23:59:59Z`).toISOString();
+
+                  const cacheKey = `${this.ORG_USER_WEEKLY_PREFIX}${this.organizationName}:${targetYear}`;
+
+                  const cachedData = await this.connectRedis.get<any>(cacheKey);
+
+                  let fullYearWeeklyData;
+
+                  if (cachedData) {
+                        console.log("Returning cached weekly contributions");
+                        fullYearWeeklyData = cachedData;
+                  } else {
+                        const result = await this.connectGitHub.getClient()<{
+                              organization: {
+                                    membersWithRole: {
+                                          nodes: {
+                                                login: string;
+                                                contributionsCollection: {
+                                                      contributionCalendar: {
+                                                            weeks: {
+                                                                  contributionDays: {
+                                                                        date: string;
+                                                                        contributionCount: number;
+                                                                  }[];
+                                                            }[];
+                                                      };
+                                                };
+                                          }[];
+                                    };
+                              };
+                        }>(
+                              `query GetOrgMembersWeekly($organizationName: String!, $num: Int!, $from: DateTime!, $to: DateTime!) {
+                    organization(login: $organizationName) {
+                        membersWithRole(first: $num) {
+                            nodes {
+                                login
+                                contributionsCollection(from: $from, to: $to) {
+                                    contributionCalendar {
+                                        weeks {
+                                            contributionDays {
+                                                date
+                                                contributionCount
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }`,
+                              {
+                                    organizationName: this.organizationName,
+                                    num: this.userNumber,
+                                    from: fromDate,
+                                    to: toDate,
+                              },
+                        );
+                        fullYearWeeklyData = result.organization.membersWithRole.nodes.map((node) => ({
+                              userName: node.login,
+                              weeks: node.contributionsCollection.contributionCalendar.weeks.map((week) => {
+                                    const totalWeekContributions = week.contributionDays.reduce(
+                                          (sum, day) => sum + day.contributionCount,
+                                          0
+                                    );
+                                    const startDate = week.contributionDays[0]?.date || '';
+
+                                    return {
+                                          startDate,
+                                          contributionCount: totalWeekContributions
+                                    };
+                              }).filter(week => week.startDate)
+                        }));
+
+                        await this.connectRedis.set(cacheKey, fullYearWeeklyData, this.SESSION_TTL_SECONDS);
+                  }
+                  const filteredData = fullYearWeeklyData.map((user: any) => ({
+                        userName: user.userName,
+                        weeklyContributions: user.weeks.filter((week: any) =>
+                              week.startDate >= startDateStr && week.startDate <= endDateStr
+                        )
+                  }));
+
+                  return filteredData;
+            } catch (error) {
+                  console.error("Error fetching organization weekly contributions:", error);
+                  throw new Error("Failed to fetch organization weekly contributions.");
+            }
+      }
       async getInsights() {
             // const [orgCommits, userContributions] = await Promise.all([
             //       this.getOrgTotalCommits(),
