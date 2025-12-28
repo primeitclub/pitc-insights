@@ -1,7 +1,7 @@
-import { ConnectGitHub } from "../../shared/config/connect-github.ts";
+import { ConnectGitHub } from "../../shared/config/connect-github";
 import { Injectable } from "@nestjs/common";
-import { ConnectRedis } from "../../shared/config/connect-redis.ts";
-import { getLastWeekFromStartDate } from "../../shared/utils/utils.ts";
+import { ConnectRedis } from "../../shared/config/connect-redis";
+import { getLastWeekFromStartDate } from "../../shared/utils/utils";
 
 // Note: Its better use a graphql variable when wrtiting queries to avoid injection attacks
 //  Note: You can make 5000 requests per hour with authentication, unauthenticated requests get 60 requests per hour
