@@ -1,6 +1,4 @@
 import { Field, Int, ObjectType } from "@nestjs/graphql";
-import { OrgCommits } from "@modules/insights/models/org-commits.model";
-import { UserContributions } from "@modules/insights/models/user-contributions.model";
 
 @ObjectType({ description: "Get Insights of an organization" })
 
