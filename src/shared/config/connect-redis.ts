@@ -2,18 +2,33 @@
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { Redis } from 'ioredis';
 
+// Singleton Redis instance for serverless environments to prevent connection exhaustion
+let sharedRedisClient: Redis | null = null;
+
 @Injectable()
 export class ConnectRedis implements OnModuleDestroy {
       private redisClient: Redis;
 
       constructor() {
+            // Reuse existing connection in serverless environments
+            if (sharedRedisClient && sharedRedisClient.status === 'ready') {
+                  this.redisClient = sharedRedisClient;
+                  return;
+            }
+
             this.redisClient = new Redis({
                   host: process.env.REDIS_HOST || 'localhost',
                   port: parseInt(process.env.REDIS_PORT || '6379'),
                   username: process.env.REDIS_USERNAME || undefined,
                   password: process.env.REDIS_PASSWORD || undefined,
-
+                  maxRetriesPerRequest: 3,
+                  lazyConnect: true,
+                  enableReadyCheck: true,
+                  // Disconnect idle clients faster in serverless
+                  disconnectTimeout: 2000,
             });
+
+            sharedRedisClient = this.redisClient;
 
             this.redisClient.on('connect', () => {
                   console.log('✅ Redis connected successfully');
