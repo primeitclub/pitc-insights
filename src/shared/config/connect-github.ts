@@ -7,7 +7,7 @@ type GraphQLClient = typeof import("@octokit/graphql").graphql;
 @Injectable()
 export class ConnectGitHub implements OnModuleInit {
       private client!: GraphQLClient;
-      private githubToken = process.env.GITonnHUB_PAT_TOKEN;
+      private githubToken = process.env.GITHUB_PAT_TOKEN;
 
       async onModuleInit() {
             if (!this.githubToken) {
