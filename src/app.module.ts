@@ -1,13 +1,13 @@
 import { Module } from '@nestjs/common';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
+import { AppController } from '@src/app.controller';
+import { AppService } from '@src/app.service';
 import { GraphQLModule } from '@nestjs/graphql';
 import { ApolloDriver, ApolloDriverConfig } from '@nestjs/apollo';
 import { join } from 'path';
 import { ConfigModule } from '@nestjs/config';
 import { CacheModule } from '@nestjs/cache-manager';
-import { InsightsModule } from './modules/insights/insights.module';
-import { RedisCacheOptions } from './shared/config/redis-cache.config';
+import { InsightsModule } from '@modules/insights/insights.module';
+import { RedisCacheOptions } from '@shared/config/redis-cache.config';
 import { ThrottlerModule } from '@nestjs/throttler';
 
 @Module({

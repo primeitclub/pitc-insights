@@ -1,8 +1,8 @@
 import { InsightsService } from "./insights.service";
 import { Args, Field, Int, Parent, Query, ResolveField, Resolver } from "@nestjs/graphql";
-import { Insights } from "./models/insights.model";
-import { UserContributions } from "./models/user-contributions.model";
-import { OrgCommits } from "./models/org-commits.model";
+import { Insights } from "@modules/insights/models/insights.model";
+import { UserContributions } from "@modules/insights/models/user-contributions.model";
+import { OrgCommits } from "@modules/insights/models/org-commits.model";
 
 // Note: Resolver provide the instruction to GraphQL on how to fetch the data for a query or mutation
 

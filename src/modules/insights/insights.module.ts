@@ -1,8 +1,8 @@
 import { Module } from "@nestjs/common";
 import { InsightsService } from "./insights.service";
 import { InsightsResolver } from "./insights.resolver";
-import { ConnectGitHub } from "src/shared/config/connect-github";
-import { ConnectRedis } from "src/shared/config/connect-redis";
+import { ConnectGitHub } from "@shared/config/connect-github";
+import { ConnectRedis } from "@shared/config/connect-redis";
 
 @Module({
       // NOTE: providers such as services, resolvers and  other injectable classes are registered here 
