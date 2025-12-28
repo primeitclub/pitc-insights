@@ -1,7 +1,6 @@
 import { ConnectGitHub } from "src/shared/config/connect-github";
 import { Injectable } from "@nestjs/common";
 import { ConnectRedis } from "src/shared/config/connect-redis";
-import { get } from "http";
 import { getLastWeekFromStartDate } from "src/shared/utils/utils";
 
 // Note: Its better use a graphql variable when wrtiting queries to avoid injection attacks
@@ -27,7 +26,9 @@ export class InsightsService {
             : 100;
       private userNumber: number = process.env.GITHUB_USER_NUMBER
             ? parseInt(process.env.GITHUB_USER_NUMBER)
-            : 100;
+            : 50;
+      // Smaller batch size for queries with contributionsCollection to avoid GitHub's resource limits
+      private contributionsBatchSize: number = 10;
       private ORG_COMMITS_PREFIX = 'orgTotalCommits_';
       private ORG_USER_CONTRIBUTIONS_PREFIX = 'orgUserContributions_';
       private ORG_USER_WEEKLY_PREFIX = 'orgUserWeeklyContributions_';
@@ -36,15 +37,16 @@ export class InsightsService {
 
 
 
-      async getOrgTotalCommits(): Promise<{ repoName: string; commits: number }[]> {
+      async getOrgTotalCommits(): Promise<{ repoName: string; totalYears: number[]; commits: number }[]> {
             try {
-                  const cachedData = await this.connectRedis.get<{ repoName: string; commits: number }[]>(this.ORG_COMMITS_PREFIX + this.organizationName);
+                  const cachedData = await this.connectRedis.get<{ repoName: string; totalYears: number[]; commits: number }[]>(this.ORG_COMMITS_PREFIX + this.organizationName);
                   if (cachedData) {
                         console.log("Returning cached organization total commits");
                         return cachedData;
                   }
                   const repos = await this.connectGitHub.getClient()<{
                         organization: {
+                              createdAt: string;
                               repositories: {
                                     pageInfo: { hasNextPage: boolean; endCursor: string };
                                     nodes: { name: string; defaultBranchRef: { target: { history: { totalCount: number } } } | null }[];
@@ -53,6 +55,7 @@ export class InsightsService {
                   }>(
                         `query GetOrgReposWithCommits($organizationName: String!, $num: Int!, $cursor: String) {
                         organization(login: $organizationName) {
+                              createdAt
                               repositories(first: $num, after: $cursor) {
                                     pageInfo {
                                           hasNextPage
@@ -79,8 +82,17 @@ export class InsightsService {
                               num: this.repoNumber,
                         },
                   );
+                  const foundingYear = new Date(repos.organization.createdAt).getFullYear();
+                  const currentYear = new Date().getFullYear();
+
+                  // Generate array of all years
+                  const totalYears: number[] = [];
+                  for (let year = foundingYear; year <= currentYear; year++) {
+                        totalYears.push(year);
+                  }
                   const orgCommits = repos.organization.repositories.nodes.map((repo) => ({
                         repoName: repo.name,
+                        totalYears: totalYears,
                         commits: repo?.defaultBranchRef?.target.history.totalCount ?? 0,
                   }));
                   await this.connectRedis.set(this.ORG_COMMITS_PREFIX + this.organizationName, orgCommits, this.SESSION_TTL_SECONDS);
@@ -94,6 +106,8 @@ export class InsightsService {
 
       async getOrgUserContributions(year?: number): Promise<{
             userName: string;
+            fullName: string;
+            avatarUrl: string;
             contributions: {
                   totalCommitContributions: number;
                   totalPullRequestContributions: number;
@@ -113,25 +127,37 @@ export class InsightsService {
                         console.log("Returning cached organization user contributions");
                         return cachedData;
                   }
-
-                  const result = await this.connectGitHub.getClient()<{
-                        organization: {
-                              membersWithRole: {
-                                    nodes: {
-                                          login: string;
-                                          contributionsCollection: {
-                                                totalCommitContributions: number;
-                                                totalPullRequestContributions: number;
-                                          };
-                                    }[];
+                  let hasNextPage = true;
+                  let afterCursor: string | null = null;
+                  const allMembers = []
+                  while (hasNextPage) {
+                        const result: {
+                              organization: {
+                                    membersWithRole: {
+                                          pageInfo: { hasNextPage: boolean; endCursor: string };
+                                          nodes: {
+                                                login: string;
+                                                name: string;
+                                                avatarUrl: string;
+                                                contributionsCollection: {
+                                                      totalCommitContributions: number;
+                                                      totalPullRequestContributions: number;
+                                                };
+                                          }[];
+                                    };
                               };
-                        };
-                  }>(
-                        `query GetOrgMembers($organizationName: String!, $num: Int!, $from: DateTime!, $to: DateTime!) {
+                        } = await this.connectGitHub.getClient()(
+                              `query GetOrgMembers($organizationName: String!, $num: Int!,$after: String, $from: DateTime!, $to: DateTime!) {
                 organization(login: $organizationName) {
-                    membersWithRole(first: $num) {
+                    membersWithRole(first: $num, after: $after) {
+                        pageInfo {
+                            hasNextPage
+                            endCursor
+                        }
                         nodes {
                             login
+                            name  
+                            avatarUrl
                             contributionsCollection(from: $from, to: $to) {
                                 totalCommitContributions
                                 totalPullRequestContributions
@@ -140,18 +166,26 @@ export class InsightsService {
                     }
                 }
             }`,
-                        {
-                              organizationName: this.organizationName,
-                              num: this.userNumber,
-                              from: fromDate,
-                              to: toDate,
-                        },
-                  );
+                              {
+                                    organizationName: this.organizationName,
+                                    num: this.contributionsBatchSize,
+                                    after: afterCursor,
+                                    from: fromDate,
+                                    to: toDate,
+                              },
+                        );
+                        // first: means the number of items to return per page starting from the beginning of the list
+                        // endCursor: means the cursor to the next page
+                        const { pageInfo, nodes } = result.organization.membersWithRole;
+                        allMembers.push(...nodes);
+                        hasNextPage = pageInfo.hasNextPage && allMembers.length < this.userNumber;
+                        afterCursor = pageInfo.endCursor;
+                  }
 
-                  console.log("Fetched organization members:", result.organization.membersWithRole.nodes.length);
-
-                  const userContributions = result.organization.membersWithRole.nodes.map((node) => ({
+                  const userContributions = allMembers.map((node) => ({
                         userName: node.login,
+                        fullName: node.name,
+                        avatarUrl: node.avatarUrl,
                         contributions: {
                               totalCommitContributions: node.contributionsCollection.totalCommitContributions,
                               totalPullRequestContributions: node.contributionsCollection.totalPullRequestContributions,
@@ -179,45 +213,57 @@ export class InsightsService {
             }>;
       }[]> {
             try {
+
                   const targetYear = year || new Date().getFullYear();
                   const startDateStr = startDate || `${targetYear}-01-01`;
                   const endDateStr = endDate || getLastWeekFromStartDate(startDateStr);
+                  console.log("START DATE", startDateStr);
+                  console.log("END DATE", endDateStr);
                   // Fetch full year for caching efficiency
                   const fromDate = new Date(`${targetYear}-01-01T00:00:00Z`).toISOString();
                   const toDate = new Date(`${targetYear}-12-31T23:59:59Z`).toISOString();
 
-                  const cacheKey = `${this.ORG_USER_WEEKLY_PREFIX}${this.organizationName}:${targetYear}`;
+                  const cacheKey = `${this.ORG_USER_WEEKLY_PREFIX}${this.organizationName}:${targetYear}:${startDateStr}:${endDateStr}`;
 
                   const cachedData = await this.connectRedis.get<any>(cacheKey);
 
                   let fullYearWeeklyData;
+                  let hasNextPage = true;
+                  let afterCursor: string | null = null;
+                  const allMembers = []
 
                   if (cachedData) {
                         console.log("Returning cached weekly contributions");
                         fullYearWeeklyData = cachedData;
                   } else {
-                        const result = await this.connectGitHub.getClient()<{
-                              organization: {
-                                    membersWithRole: {
-                                          nodes: {
-                                                login: string;
-                                                contributionsCollection: {
-                                                      contributionCalendar: {
-                                                            weeks: {
-                                                                  contributionDays: {
-                                                                        date: string;
-                                                                        contributionCount: number;
+                        while (hasNextPage) {
+                              const result: {
+                                    organization: {
+                                          membersWithRole: {
+                                                pageInfo: { hasNextPage: boolean; endCursor: string };
+                                                nodes: {
+                                                      login: string;
+                                                      contributionsCollection: {
+                                                            contributionCalendar: {
+                                                                  weeks: {
+                                                                        contributionDays: {
+                                                                              date: string;
+                                                                              contributionCount: number;
+                                                                        }[];
                                                                   }[];
-                                                            }[];
+                                                            };
                                                       };
-                                                };
-                                          }[];
+                                                }[];
+                                          };
                                     };
-                              };
-                        }>(
-                              `query GetOrgMembersWeekly($organizationName: String!, $num: Int!, $from: DateTime!, $to: DateTime!) {
+                              } = await this.connectGitHub.getClient()(
+                                    `query GetOrgMembersWeekly($organizationName: String!, $num: Int!, $after: String, $from: DateTime!, $to: DateTime!) {
                     organization(login: $organizationName) {
-                        membersWithRole(first: $num) {
+                        membersWithRole(first: $num, after: $after) {
+                            pageInfo {
+                                hasNextPage
+                                endCursor
+                            }
                             nodes {
                                 login
                                 contributionsCollection(from: $from, to: $to) {
@@ -234,14 +280,20 @@ export class InsightsService {
                         }
                     }
                 }`,
-                              {
-                                    organizationName: this.organizationName,
-                                    num: this.userNumber,
-                                    from: fromDate,
-                                    to: toDate,
-                              },
-                        );
-                        fullYearWeeklyData = result.organization.membersWithRole.nodes.map((node) => ({
+                                    {
+                                          organizationName: this.organizationName,
+                                          num: this.contributionsBatchSize,
+                                          after: afterCursor,
+                                          from: fromDate,
+                                          to: toDate,
+                                    },
+                              );
+                              const { pageInfo, nodes } = result.organization.membersWithRole;
+                              allMembers.push(...nodes);
+                              hasNextPage = pageInfo.hasNextPage && allMembers.length < this.userNumber;
+                              afterCursor = pageInfo.endCursor;
+                        }
+                        fullYearWeeklyData = allMembers.map((node) => ({
                               userName: node.login,
                               weeks: node.contributionsCollection.contributionCalendar.weeks.map((week) => {
                                     const totalWeekContributions = week.contributionDays.reduce(
@@ -249,14 +301,12 @@ export class InsightsService {
                                           0
                                     );
                                     const startDate = week.contributionDays[0]?.date || '';
-
                                     return {
                                           startDate,
                                           contributionCount: totalWeekContributions
                                     };
                               }).filter(week => week.startDate)
                         }));
-
                         await this.connectRedis.set(cacheKey, fullYearWeeklyData, this.SESSION_TTL_SECONDS);
                   }
                   const filteredData = fullYearWeeklyData.map((user: any) => ({

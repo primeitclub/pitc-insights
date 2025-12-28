@@ -10,13 +10,9 @@ export class ConnectRedis implements OnModuleDestroy {
             this.redisClient = new Redis({
                   host: process.env.REDIS_HOST || 'localhost',
                   port: parseInt(process.env.REDIS_PORT || '6379'),
+                  username: process.env.REDIS_USERNAME || undefined,
                   password: process.env.REDIS_PASSWORD || undefined,
-                  db: parseInt(process.env.REDIS_DB || '0'),
-                  retryStrategy: (times) => {
-                        // Retry connection with exponential backoff, max 30 seconds
-                        const delay = Math.min(times * 100, 30000);
-                        return delay;
-                  },
+
             });
 
             this.redisClient.on('connect', () => {

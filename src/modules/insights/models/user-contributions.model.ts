@@ -29,6 +29,12 @@ export class UserContributions {
       @Field(() => String, { description: "User name" })
       userName: string;
 
+      @Field(() => String, { nullable: true, description: "Full name of the user" })
+      fullName: string;
+
+      @Field(() => String, { nullable: true, description: "Avatar URL of the user" })
+      avatarUrl: string;
+
       @Field(() => Contributions, { description: "User contributions summary" })
       contributions: Contributions;
 

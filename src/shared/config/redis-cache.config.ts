@@ -8,9 +8,9 @@ export const RedisCacheOptions: CacheModuleAsyncOptions = {
       useFactory: async (configService: ConfigService) => ({
             store: await redisStore({
                   host: configService.get<string>('REDIS_HOST') || 'localhost',
-                  port: configService.get<number>('REDIS_PORT') || 6379,
+                  port: parseInt(configService.get<string>('REDIS_PORT') || '6379', 10),
                   password: configService.get<string>('REDIS_PASSWORD') || undefined,
-                  db: configService.get<number>('REDIS_DB') || 0,
+                  db: parseInt(configService.get<string>('REDIS_DB') || '0', 10),
                   ttl: 60 * 60, // Default TTL: 1 hour in seconds
             }),
       }),

@@ -1,5 +1,5 @@
 import { InsightsService } from "./insights.service";
-import { Args, Field, Parent, Query, ResolveField, Resolver } from "@nestjs/graphql";
+import { Args, Field, Int, Parent, Query, ResolveField, Resolver } from "@nestjs/graphql";
 import { Insights } from "./models/insights.model";
 import { UserContributions } from "./models/user-contributions.model";
 import { OrgCommits } from "./models/org-commits.model";
@@ -14,7 +14,7 @@ export class InsightsResolver {
 
       @Query(() => Insights, { description: "Get insights for the organization" })
       async getInsights(
-            @Args('year', { type: () => Number, nullable: true }) year?: number,
+            @Args('year', { type: () => Int, nullable: true }) year?: number,
             @Args('startDate', { type: () => String, nullable: true }) startDate?: string,
             @Args('endDate', { type: () => String, nullable: true }) endDate?: string,
       ) {
