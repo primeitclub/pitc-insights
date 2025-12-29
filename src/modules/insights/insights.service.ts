@@ -1,10 +1,26 @@
 import { ConnectGitHub } from "../../shared/config/connect-github";
 import { Injectable } from "@nestjs/common";
 import { ConnectRedis } from "../../shared/config/connect-redis";
-import { getLastWeekFromStartDate } from "../../shared/utils/utils";
+import { getLastWeekFromStartDate, getYearFromDateString } from "../../shared/utils/utils";
 
 // Note: Its better use a graphql variable when wrtiting queries to avoid injection attacks
 //  Note: You can make 5000 requests per hour with authentication, unauthenticated requests get 60 requests per hour
+
+// Internal interfaces for service data transformation
+interface WeekContributionData {
+      startDate: string;
+      contributionCount: number;
+}
+
+interface UserWeeklyCache {
+      userName: string;
+      weeks: WeekContributionData[];
+}
+
+interface UserWeeklyResult {
+      userName: string;
+      weeklyContributions: WeekContributionData[];
+}
 
 interface RepoCommitsResponse {
       repository: {
@@ -32,8 +48,35 @@ export class InsightsService {
       private ORG_COMMITS_PREFIX = 'orgTotalCommits_';
       private ORG_USER_CONTRIBUTIONS_PREFIX = 'orgUserContributions_';
       private ORG_USER_WEEKLY_PREFIX = 'orgUserWeeklyContributions_';
+      private ORG_ID_PREFIX = 'orgId_';
       private SESSION_TTL_SECONDS = 3600; // 1 hour
       constructor(private readonly connectGitHub: ConnectGitHub, private readonly connectRedis: ConnectRedis) { }
+
+      /**
+       * Fetches the organization's node ID (required for filtering contributions by organization)
+       */
+      private async getOrganizationId(): Promise<string> {
+            const cacheKey = `${this.ORG_ID_PREFIX}${this.organizationName}`;
+            const cachedId = await this.connectRedis.get<string>(cacheKey);
+            if (cachedId) {
+                  return cachedId;
+            }
+
+            const result = await this.connectGitHub.getClient()<{
+                  organization: { id: string };
+            }>(
+                  `query GetOrgId($organizationName: String!) {
+                        organization(login: $organizationName) {
+                              id
+                        }
+                  }`,
+                  { organizationName: this.organizationName }
+            );
+
+            const orgId = result.organization.id;
+            await this.connectRedis.set(cacheKey, orgId, this.SESSION_TTL_SECONDS * 24); // Cache for 24 hours
+            return orgId;
+      }
 
 
 
@@ -127,6 +170,8 @@ export class InsightsService {
                         console.log("Returning cached organization user contributions");
                         return cachedData;
                   }
+
+                  const orgId = await this.getOrganizationId();
                   let hasNextPage = true;
                   let afterCursor: string | null = null;
                   const allMembers = []
@@ -147,7 +192,7 @@ export class InsightsService {
                                     };
                               };
                         } = await this.connectGitHub.getClient()(
-                              `query GetOrgMembers($organizationName: String!, $num: Int!,$after: String, $from: DateTime!, $to: DateTime!) {
+                              `query GetOrgMembers($organizationName: String!, $num: Int!, $after: String, $from: DateTime!, $to: DateTime!, $orgId: ID) {
                 organization(login: $organizationName) {
                     membersWithRole(first: $num, after: $after) {
                         pageInfo {
@@ -158,7 +203,7 @@ export class InsightsService {
                             login
                             name  
                             avatarUrl
-                            contributionsCollection(from: $from, to: $to) {
+                            contributionsCollection(from: $from, to: $to, organizationID: $orgId) {
                                 totalCommitContributions
                                 totalPullRequestContributions
                             }
@@ -172,6 +217,7 @@ export class InsightsService {
                                     after: afterCursor,
                                     from: fromDate,
                                     to: toDate,
+                                    orgId: orgId,
                               },
                         );
                         // first: means the number of items to return per page starting from the beginning of the list
@@ -207,57 +253,63 @@ export class InsightsService {
 
       async getOrgUserWeeklyContributions(year?: number, startDate?: string, endDate?: string): Promise<{
             userName: string;
-            weeklyContributions: Array<{
-                  startDate: string;
-                  contributionCount: number;
-            }>;
+            weeklyContributions: { startDate: string; contributionCount: number }[];
       }[]> {
             try {
+                  const currentYear = new Date().getFullYear();
+                  const startDateStr = startDate || `${year || currentYear}-01-01`;
+                  const endDateStr = endDate || getLastWeekFromStartDate();
+                  const targetYear = year || getYearFromDateString(startDateStr);
 
-                  const targetYear = year || new Date().getFullYear();
-                  const startDateStr = startDate || `${targetYear}-01-01`;
-                  const endDateStr = endDate || getLastWeekFromStartDate(startDateStr);
+                  // Validate that date range falls within target year
+                  const startYear = getYearFromDateString(startDateStr);
+                  const endYear = getYearFromDateString(endDateStr);
+                  if (startYear !== targetYear || endYear !== targetYear) {
+                        console.warn(`Date range (${startDateStr} to ${endDateStr}) spans outside target year ${targetYear}`);
+                  }
+
                   console.log("START DATE", startDateStr);
                   console.log("END DATE", endDateStr);
-                  // Fetch full year for caching efficiency
-                  const fromDate = new Date(`${targetYear}-01-01T00:00:00Z`).toISOString();
-                  const toDate = new Date(`${targetYear}-12-31T23:59:59Z`).toISOString();
+                  console.log("TARGET YEAR", targetYear);
 
-                  const cacheKey = `${this.ORG_USER_WEEKLY_PREFIX}${this.organizationName}:${targetYear}:${startDateStr}:${endDateStr}`;
+                  // Cache key for full year data (enables reuse across different date range queries)
+                  const fullYearCacheKey = `${this.ORG_USER_WEEKLY_PREFIX}${this.organizationName}:${targetYear}:full`;
 
-                  const cachedData = await this.connectRedis.get<any>(cacheKey);
+                  // Try to get full year data from cache first
+                  let fullYearWeeklyData = await this.connectRedis.get<UserWeeklyCache[]>(fullYearCacheKey);
 
-                  let fullYearWeeklyData;
-                  let hasNextPage = true;
-                  let afterCursor: string | null = null;
-                  const allMembers = []
+                  if (!fullYearWeeklyData) {
+                        // Fetch full year for caching efficiency
+                        const fromDate = new Date(`${targetYear}-01-01T00:00:00Z`).toISOString();
+                        const toDate = new Date(`${targetYear}-12-31T23:59:59Z`).toISOString();
+                        const orgId = await this.getOrganizationId();
 
-                  if (cachedData) {
-                        console.log("Returning cached weekly contributions");
-                        fullYearWeeklyData = cachedData;
-                  } else {
+                        let hasNextPage = true;
+                        let afterCursor: string | null = null;
+                        const allMembers: {
+                              login: string;
+                              contributionsCollection: {
+                                    contributionCalendar: {
+                                          weeks: {
+                                                contributionDays: {
+                                                      date: string;
+                                                      contributionCount: number;
+                                                }[];
+                                          }[];
+                                    };
+                              };
+                        }[] = [];
+
                         while (hasNextPage) {
                               const result: {
                                     organization: {
                                           membersWithRole: {
                                                 pageInfo: { hasNextPage: boolean; endCursor: string };
-                                                nodes: {
-                                                      login: string;
-                                                      contributionsCollection: {
-                                                            contributionCalendar: {
-                                                                  weeks: {
-                                                                        contributionDays: {
-                                                                              date: string;
-                                                                              contributionCount: number;
-                                                                        }[];
-                                                                  }[];
-                                                            };
-                                                      };
-                                                }[];
+                                                nodes: typeof allMembers;
                                           };
                                     };
                               } = await this.connectGitHub.getClient()(
-                                    `query GetOrgMembersWeekly($organizationName: String!, $num: Int!, $after: String, $from: DateTime!, $to: DateTime!) {
+                                    `query GetOrgMembersWeekly($organizationName: String!, $num: Int!, $after: String, $from: DateTime!, $to: DateTime!, $orgId: ID) {
                     organization(login: $organizationName) {
                         membersWithRole(first: $num, after: $after) {
                             pageInfo {
@@ -266,7 +318,7 @@ export class InsightsService {
                             }
                             nodes {
                                 login
-                                contributionsCollection(from: $from, to: $to) {
+                                contributionsCollection(from: $from, to: $to, organizationID: $orgId) {
                                     contributionCalendar {
                                         weeks {
                                             contributionDays {
@@ -286,13 +338,17 @@ export class InsightsService {
                                           after: afterCursor,
                                           from: fromDate,
                                           to: toDate,
+                                          orgId: orgId,
                                     },
                               );
+
                               const { pageInfo, nodes } = result.organization.membersWithRole;
                               allMembers.push(...nodes);
                               hasNextPage = pageInfo.hasNextPage && allMembers.length < this.userNumber;
                               afterCursor = pageInfo.endCursor;
                         }
+
+                        // Transform API response to cached format
                         fullYearWeeklyData = allMembers.map((node) => ({
                               userName: node.login,
                               weeks: node.contributionsCollection.contributionCalendar.weeks.map((week) => {
@@ -300,21 +356,32 @@ export class InsightsService {
                                           (sum, day) => sum + day.contributionCount,
                                           0
                                     );
-                                    const startDate = week.contributionDays[0]?.date || '';
+                                    const weekStartDate = week.contributionDays[0]?.date || '';
                                     return {
-                                          startDate,
+                                          startDate: weekStartDate,
                                           contributionCount: totalWeekContributions
                                     };
-                              }).filter(week => week.startDate)
+                              }).filter((week) => week.startDate !== '')
                         }));
-                        await this.connectRedis.set(cacheKey, fullYearWeeklyData, this.SESSION_TTL_SECONDS);
+
+                        // Cache full year data for reuse
+                        await this.connectRedis.set(fullYearCacheKey, fullYearWeeklyData, this.SESSION_TTL_SECONDS);
+                        console.log("Cached full year weekly contributions");
+                  } else {
+                        console.log("Using cached full year weekly contributions");
                   }
-                  const filteredData = fullYearWeeklyData.map((user: any) => ({
+
+                  // Filter and sort based on requested date range
+                  const filteredData: UserWeeklyResult[] = fullYearWeeklyData.map((user) => ({
                         userName: user.userName,
-                        weeklyContributions: user.weeks.filter((week: any) =>
+                        weeklyContributions: user.weeks.filter((week) =>
                               week.startDate >= startDateStr && week.startDate <= endDateStr
                         )
-                  }));
+                  })).sort((a, b) => {
+                        const totalA = a.weeklyContributions.reduce((sum, week) => sum + week.contributionCount, 0);
+                        const totalB = b.weeklyContributions.reduce((sum, week) => sum + week.contributionCount, 0);
+                        return totalB - totalA;
+                  });
 
                   return filteredData;
             } catch (error) {
@@ -322,6 +389,7 @@ export class InsightsService {
                   throw new Error("Failed to fetch organization weekly contributions.");
             }
       }
+
       async getInsights() {
             // const [orgCommits, userContributions] = await Promise.all([
             //       this.getOrgTotalCommits(),

@@ -11,7 +11,7 @@ export const RedisCacheOptions: CacheModuleAsyncOptions = {
       useFactory: async (configService: ConfigService) => {
             // Reuse cached store in serverless environments
             if (cachedStore) {
-                  return { store: cachedStore, ttl: 60 * 60 };
+                  return { store: cachedStore, ttl: 10 };
             }
 
             cachedStore = await redisStore({
@@ -19,13 +19,13 @@ export const RedisCacheOptions: CacheModuleAsyncOptions = {
                   port: parseInt(configService.get<string>('REDIS_PORT') || '6379', 10),
                   password: configService.get<string>('REDIS_PASSWORD') || undefined,
                   // db: parseInt(configService.get<string>('REDIS_DB') || '0', 10),
-                  ttl: 60 * 60, // Default TTL: 1 hour in seconds
+                  ttl: 10, // Default TTL: 10 seconds
                   maxRetriesPerRequest: 3,
                   lazyConnect: true,
                   enableReadyCheck: true,
             });
 
-            return { store: cachedStore, ttl: 60 * 60 };
+            return { store: cachedStore, ttl: 10 };
       },
       inject: [ConfigService],
 };

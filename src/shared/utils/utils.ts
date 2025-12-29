@@ -1,8 +1,16 @@
-export const getLastWeekFromStartDate = (startDate: string): string => {
-      const lastWeek = new Date();
-      // Subtract 7 days worth of milliseconds (1000ms * 60s * 60m * 24h * 7d)
-      const start = new Date(startDate);
-      lastWeek.setDate(start.getDate() - 6);
-      return lastWeek.toISOString().split('T')[0];
+/**
+ * Returns the start date of the most recent complete week (7 days ago from today).
+ * Used as default end date for weekly contribution queries.
+ */
+export const getLastWeekFromStartDate = (_startDate?: string): string => {
+      const today = new Date();
+      today.setDate(today.getDate() - 7);
+      return today.toISOString().split('T')[0];
+};
 
-}
+/**
+ * Extracts the year from a date string (YYYY-MM-DD format).
+ */
+export const getYearFromDateString = (dateStr: string): number => {
+      return new Date(dateStr).getFullYear();
+};

@@ -3,74 +3,116 @@
 # ------------------------------------------------------
 
 type Contributions {
-  """Total contributions"""
+  """
+  Total contributions
+  """
   total: Int!
 
-  """Total commit contributions"""
+  """
+  Total commit contributions
+  """
   totalCommitContributions: Int!
 
-  """Total pull request contributions"""
+  """
+  Total pull request contributions
+  """
   totalPullRequestContributions: Int!
 }
 
-"""Get Insights of an organization"""
+"""
+Get Insights of an organization
+"""
 type Insights {
   endDate: String
 
-  """Organization Name"""
+  """
+  Organization Name
+  """
   orgCommits: [OrgCommits!]!
 
-  """Organization name"""
+  """
+  Organization name
+  """
   organizationName: String!
   startDate: String
 
-  """User Contributions"""
+  """
+  User Contributions
+  """
   userContributions: [UserContributions!]!
 
-  """Weekly User Contributions"""
+  """
+  Weekly User Contributions
+  """
   weeklyUserContributions: [UserContributions!]!
   year: Int
 }
 
-"""Get organization total commits"""
+"""
+Get organization total commits
+"""
 type OrgCommits {
-  """Total commits"""
+  """
+  Total commits
+  """
   commits: Int!
 
-  """Repository name"""
+  """
+  Repository name
+  """
   repoName: String!
 
-  """Array of years from founding to current year"""
+  """
+  Array of years from founding to current year
+  """
   totalYears: [Int!]!
 }
 
 type Query {
-  """Get insights for the organization"""
+  """
+  Get insights for the organization
+  """
   getInsights(endDate: String, startDate: String, year: Int): Insights!
 }
 
-"""Get list of users of an organization with their contributions"""
+"""
+Get list of users of an organization with their contributions
+"""
 type UserContributions {
-  """Avatar URL of the user"""
+  """
+  Avatar URL of the user
+  """
   avatarUrl: String
 
-  """User contributions summary"""
+  """
+  User contributions summary
+  """
   contributions: Contributions!
 
-  """Full name of the user"""
+  """
+  Full name of the user
+  """
   fullName: String
 
-  """User name"""
+  """
+  User name
+  """
   userName: String!
 
-  """Weekly contributions"""
+  """
+  Weekly contributions
+  """
   weeklyContributions: [WeeklyContribution!]
 }
 
 type WeeklyContribution {
-  """Contribution count for the week"""
+  """
+  Contribution count for the week
+  """
   contributionCount: Int!
 
-  """Start date of the week"""
+  """
+  Start date of the week
+  """
   startDate: String!
 }

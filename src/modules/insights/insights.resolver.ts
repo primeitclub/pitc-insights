@@ -1,7 +1,7 @@
 import { InsightsService } from "./insights.service";
-import { Args, Field, Int, Parent, Query, ResolveField, Resolver } from "@nestjs/graphql";
+import { Args, Int, Parent, Query, ResolveField, Resolver } from "@nestjs/graphql";
 import { Insights } from "./models/insights.model";
-import { UserContributions } from "./models/user-contributions.model";
+import { UserContributions, UserWeeklyContributions } from "./models/user-contributions.model";
 import { OrgCommits } from "./models/org-commits.model";
 
 // Note: Resolver provide the instruction to GraphQL on how to fetch the data for a query or mutation
@@ -37,7 +37,7 @@ export class InsightsResolver {
             return this.insightsService.getOrgUserContributions(year);
       }
 
-      @ResolveField(() => [UserContributions], { description: "Weekly User Contributions" })
+      @ResolveField(() => [UserWeeklyContributions], { description: "Weekly User Contributions" })
       weeklyUserContributions(@Parent() insights: Insights) {
             const year = insights.year;
             const startDate = insights.startDate;

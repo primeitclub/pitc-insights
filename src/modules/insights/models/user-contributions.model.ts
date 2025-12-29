@@ -15,7 +15,7 @@ class Contributions {
 
 // Define the weekly contributions object type
 @ObjectType()
-class WeeklyContribution {
+export class WeeklyContribution {
       @Field(() => String, { description: "Start date of the week" })
       startDate: string;
 
@@ -23,7 +23,7 @@ class WeeklyContribution {
       contributionCount: number;
 }
 
-// Main user contributions type
+// Main user contributions type (for total contributions)
 @ObjectType({ description: "Get list of users of an organization with their contributions" })
 export class UserContributions {
       @Field(() => String, { description: "User name" })
@@ -40,4 +40,14 @@ export class UserContributions {
 
       @Field(() => [WeeklyContribution], { description: "Weekly contributions", nullable: true })
       weeklyContributions?: WeeklyContribution[];
+}
+
+// Separate type for weekly user contributions (simpler structure)
+@ObjectType({ description: "User with weekly contribution data" })
+export class UserWeeklyContributions {
+      @Field(() => String, { description: "User name" })
+      userName: string;
+
+      @Field(() => [WeeklyContribution], { description: "Weekly contributions" })
+      weeklyContributions: WeeklyContribution[];
 }
